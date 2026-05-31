@@ -59,6 +59,14 @@ LISTEN_COLOR   = (255, 200,  60)  # warm amber
 THINK_COLOR    = (160,  80, 255)  # gentle purple
 SPEAK_COLOR    = (80,  255, 140)  # mint green
 
+# ── Sprite paths ──────────────────────────────────────────────────────────────
+
+SPRITE_DIR   = os.path.dirname(os.path.abspath(__file__))
+SPRITE_IDLE  = os.path.join(SPRITE_DIR, "idle.png")
+SPRITE_LISTEN  = os.path.join(SPRITE_DIR, "listening.png")
+SPRITE_THINK   = os.path.join(SPRITE_DIR, "thinking.png")
+SPRITE_SPEAK   = os.path.join(SPRITE_DIR, "speaking.png")
+
 # ── API clients ───────────────────────────────────────────────────────────────
 
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -106,7 +114,6 @@ class Hardware:
         period = 8.0
         while self._breathing:
             t = time.time() % period
-            # sine wave mapped 0→1→0
             brightness = (math.sin(math.pi * t / period)) ** 2
             r = int(color[0] * brightness)
             g = int(color[1] * brightness)
@@ -125,61 +132,27 @@ class Hardware:
 
     # ── Screen helpers ──
 
-    def show_idle(self):
+    def _show_sprite(self, sprite_path, label):
         if not self.gui:
-            print("[screen] IDLE — Pip is here ♥")
+            print(f"[screen] {label}")
             return
         self.gui.clear()
-        # creature face: two circle eyes, small arc smile
-        self.gui.draw_circle(x=120, y=130, r=60, width=3, color="#50b4ff")
-        # eyes
-        self.gui.fill_circle(x=100, y=120, r=8,  color="#ffffff")
-        self.gui.fill_circle(x=140, y=120, r=8,  color="#ffffff")
-        self.gui.fill_circle(x=102, y=122, r=4,  color="#1a1a2e")
-        self.gui.fill_circle(x=142, y=122, r=4,  color="#1a1a2e")
-        # smile
-        self.gui.draw_arc(x=120, y=145, r=18, start=0, end=180,
-                          width=3, color="#ffffff")
-        self.gui.draw_text(x=120, y=210, text="I'm here ♥",
-                           font_size=16, color="#50b4ff", origin="center")
+        self.gui.draw_image(x=120, y=120, w=200, h=200,
+                            image=sprite_path, origin="center")
+        self.gui.draw_text(x=120, y=230, text=label,
+                           font_size=15, color="#ffffff", origin="center")
+
+    def show_idle(self):
+        self._show_sprite(SPRITE_IDLE, "I'm here ♥")
 
     def show_listening(self):
-        if not self.gui:
-            print("[screen] LISTENING")
-            return
-        self.gui.clear()
-        self.gui.fill_circle(x=120, y=130, r=60, color="#ffc83c")
-        self.gui.fill_circle(x=100, y=120, r=8,  color="#1a1a2e")
-        self.gui.fill_circle(x=140, y=120, r=8,  color="#1a1a2e")
-        # open mouth = circle
-        self.gui.fill_circle(x=120, y=150, r=10, color="#1a1a2e")
-        self.gui.draw_text(x=120, y=210, text="I'm listening…",
-                           font_size=16, color="#ffc83c", origin="center")
+        self._show_sprite(SPRITE_LISTEN, "I'm listening…")
 
     def show_thinking(self):
-        if not self.gui:
-            print("[screen] THINKING")
-            return
-        self.gui.clear()
-        self.gui.fill_circle(x=120, y=130, r=60, color="#a050ff")
-        self.gui.fill_circle(x=100, y=120, r=8,  color="#ffffff")
-        self.gui.fill_circle(x=140, y=120, r=8,  color="#ffffff")
-        # squiggly brow lines as text
-        self.gui.draw_text(x=120, y=210, text="hmm…",
-                           font_size=16, color="#a050ff", origin="center")
+        self._show_sprite(SPRITE_THINK, "hmm…")
 
     def show_speaking(self):
-        if not self.gui:
-            print("[screen] SPEAKING")
-            return
-        self.gui.clear()
-        self.gui.fill_circle(x=120, y=130, r=60, color="#50ff8c")
-        self.gui.fill_circle(x=100, y=120, r=8,  color="#1a1a2e")
-        self.gui.fill_circle(x=140, y=120, r=8,  color="#1a1a2e")
-        self.gui.draw_arc(x=120, y=145, r=18, start=0, end=180,
-                          width=4, color="#1a1a2e")
-        self.gui.draw_text(x=120, y=210, text="talking to you…",
-                           font_size=15, color="#50ff8c", origin="center")
+        self._show_sprite(SPRITE_SPEAK, "talking to you…")
 
     # ── Button ──
 
@@ -197,7 +170,6 @@ class Hardware:
 def record_audio() -> bytes:
     """Record from built-in mic; stop early on sustained silence."""
     if not ON_DEVICE:
-        # return a tiny silent WAV for offline dev
         print("[dev] Skipping real recording — returning silent stub")
         buf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         _write_silent_wav(buf.name)
@@ -375,7 +347,6 @@ def main():
 
         except Exception as exc:
             print(f"[error] {exc}")
-            # gentle fallback so Esther isn't left in silence
             try:
                 fallback = "Oh whoosh — I had a little hiccup. I'm still here though, I promise."
                 hw.show_speaking()
