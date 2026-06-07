@@ -36,7 +36,7 @@ CHUNK           = 1024
 SILENCE_THRESH  = 500   # RMS below this = silence
 SILENCE_SECS    = 1.5   # consecutive silence before early stop
 
-TTS_VOICE = "nova"
+TTS_VOICE = "verse"
 
 SYSTEM_PROMPT = (
     "You are Pip, a tiny magical creature who lives in a special device just for Esther. "
@@ -143,6 +143,37 @@ class Hardware:
 
     def show_speaking(self):
         self._show_sprite(SPRITE_SPEAK, "talking to you…")
+
+    def choose_profile(self, options):
+        """Show a row of soft on-screen buttons; block until one is tapped."""
+        if not self.gui:
+            print(f"[screen] Who's there? {options}")
+            choice = input(f"[dev] Type a name {options} (or press ENTER for default): ").strip()
+            return choice if choice in options else options[0]
+
+        chosen = {"name": None}
+
+        def make_handler(name):
+            def handler():
+                chosen["name"] = name
+            return handler
+
+        self.gui.clear()
+        self.gui.draw_text(x=120, y=60, text="Who's with you?",
+                           font_size=18, color="#ffffff", origin="center")
+
+        spacing = 240 // (len(options) + 1)
+        for i, name in enumerate(options, start=1):
+            self.gui.add_button(
+                x=spacing * i, y=140, w=spacing - 20, h=60,
+                text=name, origin="center",
+                onclick=make_handler(name),
+            )
+
+        while chosen["name"] is None:
+            time.sleep(0.05)
+
+        return chosen["name"]
 
     # ── Button ──
 
@@ -257,10 +288,53 @@ def close_playback():
 REALTIME_MODEL = "gpt-realtime"
 REALTIME_URL   = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
 
-REALTIME_INSTRUCTIONS = SYSTEM_PROMPT + (
+REALTIME_BASE_INSTRUCTIONS = SYSTEM_PROMPT + (
     " Speak in a warm, gentle, slightly playful voice — like a tiny best friend, "
     "never like a parent or teacher."
 )
+
+# ── Profiles ──────────────────────────────────────────────────────────────────
+#
+# Esther taps a screen button to say who's with her before she talks to Pip.
+# This lets Pip adjust its tone without ever needing to ask "who's there?" —
+# one less bit of friction between Esther and feeling heard.
+
+PROFILES = {
+    "Esther": (
+        " You're talking directly with Esther. Speak right to her, warmly and "
+        "personally, like you've known her forever."
+    ),
+    "Miriam": (
+        " You're talking with Miriam, Esther's grown-up. Stay just as warm, but "
+        "you can speak a little more plainly — no need to over-explain feelings "
+        "the way you would for Esther."
+    ),
+    "Friend": (
+        " You're talking with one of Esther's friends. Be extra welcoming and a "
+        "little more playful and curious — help them feel like part of Esther's "
+        "world too."
+    ),
+}
+
+DEFAULT_PROFILE = "Esther"
+
+# Lower temperature keeps Pip's tone gentle and consistent rather than wild;
+# the output token cap keeps replies short so Esther isn't overwhelmed.
+REALTIME_TEMPERATURE = 0.7
+REALTIME_MAX_OUTPUT_TOKENS = 200
+
+# Tuned so Pip waits for a real pause (kids often pause mid-thought) before
+# deciding Esther is done talking.
+REALTIME_TURN_DETECTION = {
+    "type": "server_vad",
+    "threshold": 0.5,
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 700,
+}
+
+
+def instructions_for_profile(profile: str) -> str:
+    return REALTIME_BASE_INSTRUCTIONS + PROFILES.get(profile, PROFILES[DEFAULT_PROFILE])
 
 
 class RealtimeSession:
@@ -269,9 +343,10 @@ class RealtimeSession:
     Streams mic audio in, streams speech audio out — no separate STT/TTS hops.
     """
 
-    def __init__(self, on_audio_chunk, on_state_change):
+    def __init__(self, on_audio_chunk, on_state_change, profile=DEFAULT_PROFILE):
         self._on_audio_chunk  = on_audio_chunk
         self._on_state_change = on_state_change
+        self._profile = profile
         self._ws = websocket.create_connection(
             REALTIME_URL,
             header=[
@@ -289,11 +364,13 @@ class RealtimeSession:
             "type": "session.update",
             "session": {
                 "modalities": ["audio", "text"],
-                "instructions": REALTIME_INSTRUCTIONS,
+                "instructions": instructions_for_profile(self._profile),
                 "voice": TTS_VOICE,
                 "input_audio_format": "pcm16",
                 "output_audio_format": "pcm16",
-                "turn_detection": {"type": "server_vad"},
+                "turn_detection": REALTIME_TURN_DETECTION,
+                "temperature": REALTIME_TEMPERATURE,
+                "max_response_output_tokens": REALTIME_MAX_OUTPUT_TOKENS,
             },
         })
 
@@ -338,6 +415,13 @@ def main():
     hw.start_breathing(IDLE_COLOR)
 
     while True:
+        # ── who's there? — soft button picker instead of Pip introducing itself ──
+        hw.stop_breathing()
+        profile = hw.choose_profile(list(PROFILES.keys()))
+        print(f"[profile] {profile}")
+        hw.show_idle()
+        hw.start_breathing(IDLE_COLOR)
+
         # ── wait for button ──────────────────────────────────────
         hw.wait_for_button()
 
@@ -345,6 +429,7 @@ def main():
             session = RealtimeSession(
                 on_audio_chunk=play_audio_chunk,
                 on_state_change=lambda s: None,
+                profile=profile,
             )
 
             # ── listening — stream mic straight into the session ──
