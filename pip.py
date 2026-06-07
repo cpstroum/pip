@@ -7,11 +7,10 @@ import os
 import time
 import math
 import threading
-import tempfile
-import wave
+import json
+import base64
 
-import anthropic
-import openai
+import websocket  # websocket-client
 
 # Unihiker / PinPong imports — available on device
 try:
@@ -25,8 +24,7 @@ except ImportError:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-OPENAI_API_KEY    = os.environ["OPENAI_API_KEY"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 NEOPIXEL_PIN   = "P0"   # change to match your wiring
 NEOPIXEL_COUNT = 8
@@ -38,10 +36,7 @@ CHUNK           = 1024
 SILENCE_THRESH  = 500   # RMS below this = silence
 SILENCE_SECS    = 1.5   # consecutive silence before early stop
 
-TTS_VOICE  = "nova"
-TTS_MODEL  = "tts-1"
-STT_MODEL  = "whisper-1"
-LLM_MODEL  = "claude-sonnet-4-20250514"
+TTS_VOICE = "nova"
 
 SYSTEM_PROMPT = (
     "You are Pip, a tiny magical creature who lives in a special device just for Esther. "
@@ -66,11 +61,6 @@ SPRITE_IDLE  = os.path.join(SPRITE_DIR, "idle.png")
 SPRITE_LISTEN  = os.path.join(SPRITE_DIR, "listening.png")
 SPRITE_THINK   = os.path.join(SPRITE_DIR, "thinking.png")
 SPRITE_SPEAK   = os.path.join(SPRITE_DIR, "speaking.png")
-
-# ── API clients ───────────────────────────────────────────────────────────────
-
-anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-openai_client    = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # ── Hardware helpers ──────────────────────────────────────────────────────────
 
@@ -166,15 +156,21 @@ class Hardware:
 
 
 # ── Audio helpers ─────────────────────────────────────────────────────────────
+#
+# The realtime model wants raw PCM16 chunks pushed to it as they're captured,
+# and hands speech back the same way — so we stream both directions instead of
+# recording/playing whole files.
 
-def record_audio() -> bytes:
-    """Record from built-in mic; stop early on sustained silence."""
+_playback_stream = None
+_playback_pa     = None
+
+
+def stream_microphone(session, duration=RECORD_SECONDS):
+    """Capture mic audio and push PCM16 chunks straight into the session."""
     if not ON_DEVICE:
-        print("[dev] Skipping real recording — returning silent stub")
-        buf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        _write_silent_wav(buf.name)
-        with open(buf.name, "rb") as f:
-            return f.read()
+        print("[dev] Skipping real recording — sending silent stub chunk")
+        session.send_audio_chunk(b"\x00\x00" * CHUNK)
+        return
 
     pa     = pyaudio.PyAudio()
     stream = pa.open(
@@ -185,13 +181,12 @@ def record_audio() -> bytes:
         frames_per_buffer=CHUNK,
     )
 
-    frames       = []
     silence_time = 0.0
     start        = time.time()
 
     while True:
         data = stream.read(CHUNK, exception_on_overflow=False)
-        frames.append(data)
+        session.send_audio_chunk(data)
 
         rms = _rms(data)
         dt  = CHUNK / SAMPLE_RATE
@@ -201,7 +196,7 @@ def record_audio() -> bytes:
             silence_time = 0.0
 
         elapsed = time.time() - start
-        if elapsed >= RECORD_SECONDS:
+        if elapsed >= duration:
             break
         if silence_time >= SILENCE_SECS and elapsed > 1.0:
             break
@@ -209,17 +204,6 @@ def record_audio() -> bytes:
     stream.stop_stream()
     stream.close()
     pa.terminate()
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        path = f.name
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(b"".join(frames))
-
-    with open(path, "rb") as f:
-        return f.read()
 
 
 def _rms(data: bytes) -> float:
@@ -231,74 +215,117 @@ def _rms(data: bytes) -> float:
     return math.sqrt(sum(s * s for s in shorts) / count)
 
 
-def _write_silent_wav(path: str):
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(b"\x00\x00" * SAMPLE_RATE)
+def play_audio_chunk(pcm16_bytes: bytes):
+    """Play a streamed PCM16 chunk as it arrives, keeping one open output stream."""
+    global _playback_stream, _playback_pa
 
-
-def play_audio(audio_bytes: bytes):
     if not ON_DEVICE:
-        print("[dev] Would play audio — skipping on desktop")
         return
 
-    pa = pyaudio.PyAudio()
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(audio_bytes)
-        path = f.name
-
-    with wave.open(path, "rb") as wf:
-        stream = pa.open(
-            format=pa.get_format_from_width(wf.getsampwidth()),
-            channels=wf.getnchannels(),
-            rate=wf.getframerate(),
+    if _playback_pa is None:
+        _playback_pa = pyaudio.PyAudio()
+    if _playback_stream is None:
+        _playback_stream = _playback_pa.open(
+            format=pyaudio.paInt16,
+            channels=CHANNELS,
+            rate=SAMPLE_RATE,
             output=True,
         )
-        data = wf.readframes(CHUNK)
-        while data:
-            stream.write(data)
-            data = wf.readframes(CHUNK)
-        stream.stop_stream()
-        stream.close()
 
-    pa.terminate()
+    _playback_stream.write(pcm16_bytes)
 
 
-# ── AI pipeline ───────────────────────────────────────────────────────────────
+def close_playback():
+    global _playback_stream, _playback_pa
 
-def transcribe(audio_bytes: bytes) -> str:
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(audio_bytes)
-        path = f.name
-    with open(path, "rb") as f:
-        result = openai_client.audio.transcriptions.create(
-            model=STT_MODEL,
-            file=f,
-            language="en",
+    if _playback_stream is not None:
+        _playback_stream.stop_stream()
+        _playback_stream.close()
+        _playback_stream = None
+    if _playback_pa is not None:
+        _playback_pa.terminate()
+        _playback_pa = None
+
+
+# ── Realtime pipeline ─────────────────────────────────────────────────────────
+#
+# Instead of chaining Whisper STT → Claude → TTS (three sequential network
+# round-trips per turn), we use OpenAI's realtime speech-to-speech model over
+# a single streaming websocket session. Pip's persona now lives entirely in
+# REALTIME_INSTRUCTIONS since the realtime model both "thinks" and "speaks".
+
+REALTIME_MODEL = "gpt-realtime"
+REALTIME_URL   = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
+
+REALTIME_INSTRUCTIONS = SYSTEM_PROMPT + (
+    " Speak in a warm, gentle, slightly playful voice — like a tiny best friend, "
+    "never like a parent or teacher."
+)
+
+
+class RealtimeSession:
+    """One persistent websocket connection to the realtime model.
+
+    Streams mic audio in, streams speech audio out — no separate STT/TTS hops.
+    """
+
+    def __init__(self, on_audio_chunk, on_state_change):
+        self._on_audio_chunk  = on_audio_chunk
+        self._on_state_change = on_state_change
+        self._ws = websocket.create_connection(
+            REALTIME_URL,
+            header=[
+                f"Authorization: Bearer {OPENAI_API_KEY}",
+                "OpenAI-Beta: realtime=v1",
+            ],
         )
-    return result.text.strip()
+        self._configure_session()
 
+    def _send(self, event: dict):
+        self._ws.send(json.dumps(event))
 
-def ask_pip(transcript: str) -> str:
-    message = anthropic_client.messages.create(
-        model=LLM_MODEL,
-        max_tokens=150,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": transcript}],
-    )
-    return message.content[0].text.strip()
+    def _configure_session(self):
+        self._send({
+            "type": "session.update",
+            "session": {
+                "modalities": ["audio", "text"],
+                "instructions": REALTIME_INSTRUCTIONS,
+                "voice": TTS_VOICE,
+                "input_audio_format": "pcm16",
+                "output_audio_format": "pcm16",
+                "turn_detection": {"type": "server_vad"},
+            },
+        })
 
+    def send_audio_chunk(self, pcm16_bytes: bytes):
+        self._send({
+            "type": "input_audio_buffer.append",
+            "audio": base64.b64encode(pcm16_bytes).decode("ascii"),
+        })
 
-def speak(text: str) -> bytes:
-    response = openai_client.audio.speech.create(
-        model=TTS_MODEL,
-        voice=TTS_VOICE,
-        input=text,
-        response_format="wav",
-    )
-    return response.content
+    def commit_and_respond(self):
+        self._send({"type": "input_audio_buffer.commit"})
+        self._send({"type": "response.create"})
+
+    def pump_until_response_done(self):
+        """Read events until the model finishes speaking, dispatching callbacks."""
+        while True:
+            event = json.loads(self._ws.recv())
+            etype = event.get("type", "")
+
+            if etype == "response.audio.delta":
+                self._on_state_change("speaking")
+                self._on_audio_chunk(base64.b64decode(event["delta"]))
+            elif etype == "response.audio_transcript.delta":
+                print(f"[pip]   {event.get('delta', '')}", end="", flush=True)
+            elif etype == "response.done":
+                print()
+                return
+            elif etype == "error":
+                raise RuntimeError(event.get("error", event))
+
+    def close(self):
+        self._ws.close()
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
@@ -314,44 +341,55 @@ def main():
         # ── wait for button ──────────────────────────────────────
         hw.wait_for_button()
 
-        # ── listening ────────────────────────────────────────────
-        hw.stop_breathing()
-        hw.show_listening()
-        hw.start_breathing(LISTEN_COLOR)
-
-        audio = record_audio()
-
-        hw.stop_breathing()
-
-        # ── transcribe ───────────────────────────────────────────
-        hw.show_thinking()
-        hw.pulse_once(THINK_COLOR, duration=0.4)
-
         try:
-            transcript = transcribe(audio)
-            print(f"[heard] {transcript!r}")
+            session = RealtimeSession(
+                on_audio_chunk=play_audio_chunk,
+                on_state_change=lambda s: None,
+            )
 
-            if not transcript:
-                transcript = "I don't know what to say."
+            # ── listening — stream mic straight into the session ──
+            hw.stop_breathing()
+            hw.show_listening()
+            hw.start_breathing(LISTEN_COLOR)
 
-            # ── ask Pip ──────────────────────────────────────────
-            response_text = ask_pip(transcript)
-            print(f"[pip]   {response_text!r}")
+            stream_microphone(session, duration=RECORD_SECONDS)
+            session.commit_and_respond()
 
-            # ── TTS ──────────────────────────────────────────────
+            hw.stop_breathing()
+
+            # ── thinking → speaking — handled by streamed callbacks ──
+            hw.show_thinking()
+            hw.pulse_once(THINK_COLOR, duration=0.3)
+
             hw.show_speaking()
             hw.start_breathing(SPEAK_COLOR)
-            audio_out = speak(response_text)
-            play_audio(audio_out)
+            session.pump_until_response_done()
             hw.stop_breathing()
+            close_playback()
+
+            session.close()
 
         except Exception as exc:
             print(f"[error] {exc}")
             try:
-                fallback = "Oh whoosh — I had a little hiccup. I'm still here though, I promise."
+                fallback_session = RealtimeSession(
+                    on_audio_chunk=play_audio_chunk,
+                    on_state_change=lambda s: None,
+                )
                 hw.show_speaking()
-                audio_out = speak(fallback)
-                play_audio(audio_out)
+                fallback_session._send({
+                    "type": "response.create",
+                    "response": {
+                        "modalities": ["audio"],
+                        "instructions": (
+                            "Say, gently and warmly: Oh whoosh — I had a little "
+                            "hiccup. I'm still here though, I promise."
+                        ),
+                    },
+                })
+                fallback_session.pump_until_response_done()
+                close_playback()
+                fallback_session.close()
             except Exception:
                 pass
 
