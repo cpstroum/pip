@@ -398,6 +398,7 @@ class RealtimeSession:
         self._send({
             "type": "session.update",
             "session": {
+                "type": "session",
                 "modalities": ["audio", "text"],
                 "instructions": instructions_for_profile(self._profile),
                 "voice": TTS_VOICE,
