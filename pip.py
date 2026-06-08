@@ -484,7 +484,6 @@ def greet(hw, profile):
         session._send({
             "type": "response.create",
             "response": {
-                "modalities": ["audio", "text"],
                 "instructions": (
                     f"Greet {profile} warmly and briefly — one or two sentences "
                     "max. Let them know you're here and ready to listen whenever "
@@ -587,7 +586,6 @@ def main():
                     fallback._send({
                         "type": "response.create",
                         "response": {
-                            "modalities": ["audio"],
                             "instructions": (
                                 "Say, gently and warmly: Oh whoosh — I had a little "
                                 "hiccup. I'm still here though, I promise."
