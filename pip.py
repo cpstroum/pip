@@ -445,13 +445,13 @@ class RealtimeSession:
             event = json.loads(self._ws.recv())
             etype = event.get("type", "")
 
-            if etype == "response.audio.delta":
+            if etype == "response.output_audio.delta":
                 chunk = base64.b64decode(event["delta"])
                 audio_bytes_received += len(chunk)
                 print(f"[audio] got {len(chunk)} bytes (total {audio_bytes_received})")
                 self._on_state_change("speaking")
                 self._on_audio_chunk(chunk)
-            elif etype in ("response.audio_transcript.delta", "response.audio.transcript.delta"):
+            elif etype == "response.output_audio_transcript.delta":
                 print(f"[Nemma says] {event.get('delta', '')}", end="")
             elif etype in ("conversation.item.input_audio_transcription.delta",
                            "input_audio_transcription.delta"):
