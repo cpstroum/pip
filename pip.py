@@ -16,12 +16,11 @@ import websocket  # websocket-client
 
 load_dotenv()
 
-logging.basicConfig(
-    filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), "nemma.log"),
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(message)s",
-    force=True,
-)
+_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nemma.log")
+_log_handler = logging.FileHandler(_log_path)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logging.root.setLevel(logging.DEBUG)
+logging.root.addHandler(_log_handler)
 log = logging.getLogger("nemma")
 
 
