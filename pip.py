@@ -39,6 +39,7 @@ print = _print
 try:
     from unihiker import GUI
     from pinpong.board import Board, Pin, NeoPixel
+    import pinpong.extension.unihiker as uni_ext
     import pyaudio
     ON_DEVICE = True
 except ImportError:
@@ -101,7 +102,8 @@ class Hardware:
             Board("UNIHIKER").begin()
             self.gui = GUI()
             self.np  = NeoPixel(Pin(Pin.P0), NEOPIXEL_COUNT)
-            self._btn = Pin(Pin.P23, Pin.IN)
+            _ba = getattr(uni_ext, "button_a", None)
+            self._btn = _ba() if callable(_ba) else _ba
 
     # ── NeoPixel helpers ──
 
@@ -208,23 +210,33 @@ class Hardware:
 
     # ── Button ──
 
+    def _read_button_a(self):
+        """Read Button A state — returns True if pressed."""
+        if self._btn is None:
+            return False
+        for attr in ("is_pressed", "pressed", "value", "read", "status"):
+            val = getattr(self._btn, attr, None)
+            if val is not None:
+                return bool(val() if callable(val) else val)
+        return False
+
     def wait_for_button(self):
-        """Block until button is freshly pressed (debounced)."""
+        """Block until Button A is freshly pressed (debounced)."""
         if not ON_DEVICE:
             input("[dev] Press ENTER to simulate button press…")
             return
-        # Ensure button is released before waiting for next press
-        while self._btn.read_digital() == 0:
+        # Wait for button to be released first (debounce from previous turn)
+        while self._read_button_a():
             time.sleep(0.05)
-        # Now wait for press
-        while self._btn.read_digital() == 1:
+        # Then wait for a fresh press
+        while not self._read_button_a():
             time.sleep(0.05)
 
     def is_button_held(self):
-        """Return True while button is held down."""
+        """Return True while Button A is held down."""
         if not ON_DEVICE:
             return False
-        return self._btn.read_digital() == 0
+        return self._read_button_a()
 
     def show_ready(self):
         """Idle screen with push-to-talk prompt."""
