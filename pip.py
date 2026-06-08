@@ -535,19 +535,45 @@ def main():
                 hw.show_listening()
                 hw.start_breathing(LISTEN_COLOR)
 
-                stream_microphone(session, duration=RECORD_SECONDS)
-                session.commit_and_respond()
+                # Stream mic and pump events concurrently — server VAD
+                # auto-commits and creates a response while we're still
+                # listening, so we must not miss those audio delta events.
+                response_done = threading.Event()
+                stream_error  = [None]
 
+                def do_stream():
+                    try:
+                        stream_microphone(session, duration=RECORD_SECONDS)
+                    except Exception as e:
+                        stream_error[0] = e
+
+                def do_pump():
+                    try:
+                        session.pump_until_response_done()
+                    finally:
+                        response_done.set()
+
+                t_stream = threading.Thread(target=do_stream, daemon=True)
+                t_pump   = threading.Thread(target=do_pump,   daemon=True)
+                t_stream.start()
+                t_pump.start()
+
+                # Update screen when response starts arriving
                 hw.stop_breathing()
                 hw.show_thinking()
-                hw.pulse_once(THINK_COLOR, duration=0.3)
+                response_done.wait(timeout=30)
 
+                hw.stop_breathing()
                 hw.show_speaking()
                 hw.start_breathing(SPEAK_COLOR)
-                session.pump_until_response_done()
+                t_pump.join(timeout=5)
+                t_stream.join(timeout=2)
                 hw.stop_breathing()
                 close_playback()
                 session.close()
+
+                if stream_error[0]:
+                    raise stream_error[0]
 
             except Exception as exc:
                 print(f"[error] {exc}")
