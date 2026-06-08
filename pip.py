@@ -516,13 +516,22 @@ class RealtimeSession:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def greet(hw, profile):
-    """Nemma greets whoever just selected their name — no button press needed."""
+    """Open a session, greet the user, and return the open session for reuse.
+
+    Keeping the session alive across turns preserves conversation history and
+    eliminates the ~700ms reconnect delay that caused button-release timing issues.
+    """
     try:
         session = RealtimeSession(
             on_audio_chunk=play_audio_chunk,
             on_state_change=lambda s: None,
             profile=profile,
         )
+    except Exception as exc:
+        print(f"[greet] connection failed: {exc}")
+        return None
+
+    try:
         hw.show_speaking()
         hw.start_breathing(SPEAK_COLOR)
         session._send({
@@ -538,9 +547,14 @@ def greet(hw, profile):
         session.pump_until_response_done()
         hw.stop_breathing()
         close_playback()
-        session.close()
+        return session
     except Exception as exc:
         print(f"[greet error] {exc}")
+        try:
+            session.close()
+        except Exception:
+            pass
+        return None
 
 
 def main():
@@ -551,68 +565,73 @@ def main():
     hw.start_breathing(IDLE_COLOR)
 
     while True:
-        # ── who's there? ─────────────────────────────────────────
+        # ── profile picker ──────────────────────────────────────────
         hw.stop_breathing()
         profile = hw.choose_profile(list(PROFILES.keys()))
         print(f"[profile] {profile}")
 
-        # ── Nemma greets the profile immediately ───────────────────
-        greet(hw, profile)
+        # ── greet and keep the session open for all subsequent turns ─
+        # Reusing one session eliminates the ~700ms reconnect delay that
+        # caused the button to be released before the mic ever started.
+        session = greet(hw, profile)
 
-        # ── conversation loop — stays here until device is restarted ──
         hw.show_ready()
         hw.start_breathing(IDLE_COLOR)
 
+        # ── conversation loop — press once to talk ──────────────────
         while True:
-            # ── wait for button press, then hold to talk ─────────
-            hw.wait_for_button()
+            hw.wait_for_button()   # press once; no need to hold
 
             try:
-                session = RealtimeSession(
-                    on_audio_chunk=play_audio_chunk,
-                    on_state_change=lambda s: None,
-                    profile=profile,
-                )
+                # Reconnect if the session was lost due to an error
+                if session is None:
+                    print("[ws] reconnecting…")
+                    session = RealtimeSession(
+                        on_audio_chunk=play_audio_chunk,
+                        on_state_change=lambda s: None,
+                        profile=profile,
+                    )
 
                 hw.stop_breathing()
                 hw.show_listening()
                 hw.start_breathing(LISTEN_COLOR)
 
-                # Stream mic and pump events concurrently — server VAD
-                # auto-commits and creates a response while we're still
-                # listening, so we must not miss those audio delta events.
+                # stream_stop: signals the mic thread to stop (set by pump when
+                # response.done arrives, or externally after timeout).
+                stream_stop   = threading.Event()
                 response_done = threading.Event()
-                stream_error  = [None]
 
-                def do_stream():
+                def do_stream(sess=session, stop=stream_stop):
                     try:
-                        stream_microphone(session,
-                                          stop_fn=hw.is_button_held,
-                                          duration=RECORD_SECONDS)
-                        # Send 0.8s of silence so server VAD detects speech end
-                        # after button release and triggers a response.
+                        # No button-hold check — server VAD + client silence
+                        # detection handle end-of-speech automatically.
+                        stream_microphone(sess,
+                                          stop_fn=lambda: not stop.is_set(),
+                                          duration=30)
+                        # Silence padding ensures server VAD fires even if the
+                        # client silence threshold beats the server threshold.
                         silence = b"\x00\x00" * CHUNK
-                        n = int(0.8 * MIC_SAMPLE_RATE / CHUNK)
-                        for _ in range(n):
-                            session.send_audio_chunk(silence)
+                        for _ in range(int(0.8 * MIC_SAMPLE_RATE / CHUNK)):
+                            sess.send_audio_chunk(silence)
                     except Exception as e:
-                        stream_error[0] = e
+                        print(f"[stream error] {e}")
 
-                def do_pump():
+                def do_pump(rdone=response_done, stop=stream_stop, sess=session):
                     try:
-                        session.pump_until_response_done()
+                        sess.pump_until_response_done()
+                    except Exception as e:
+                        print(f"[pump error] {e}")
                     finally:
-                        response_done.set()
+                        stop.set()    # tell mic thread to stop
+                        rdone.set()
 
                 t_stream = threading.Thread(target=do_stream, daemon=True)
                 t_pump   = threading.Thread(target=do_pump,   daemon=True)
                 t_stream.start()
                 t_pump.start()
 
-                # Update screen when response starts arriving
-                hw.stop_breathing()
-                hw.show_thinking()
                 response_done.wait(timeout=30)
+                stream_stop.set()   # ensure mic stops even on timeout
 
                 hw.stop_breathing()
                 hw.show_speaking()
@@ -621,13 +640,15 @@ def main():
                 t_stream.join(timeout=2)
                 hw.stop_breathing()
                 close_playback()
-                session.close()
-
-                if stream_error[0]:
-                    raise stream_error[0]
+                # Session stays open — do NOT close it here
 
             except Exception as exc:
                 print(f"[error] {exc}")
+                try:
+                    session.close()
+                except Exception:
+                    pass
+                session = None   # will reconnect next turn
                 try:
                     hw.show_speaking()
                     fallback = RealtimeSession(
