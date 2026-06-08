@@ -24,13 +24,15 @@ logging.root.addHandler(_log_handler)
 log = logging.getLogger("nemma")
 
 
+_builtin_print = print
+
+
 def _print(*args, **kwargs):
     msg = " ".join(str(a) for a in args)
     log.info(msg)
-    print(msg, **kwargs)
+    _builtin_print(msg, **kwargs)
 
 
-# Replace all print() calls with _print() so output goes to both log and stdout
 print = _print
 
 # Unihiker / PinPong imports — available on device
