@@ -293,7 +293,7 @@ def close_playback():
 # a single streaming websocket session. Nemma's persona now lives entirely in
 # REALTIME_INSTRUCTIONS since the realtime model both "thinks" and "speaks".
 
-REALTIME_MODEL = "gpt-realtime"
+REALTIME_MODEL = "gpt-4o-realtime-preview"
 REALTIME_URL   = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
 
 REALTIME_BASE_INSTRUCTIONS = SYSTEM_PROMPT + (
@@ -415,80 +415,111 @@ class RealtimeSession:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
+def greet(hw, profile):
+    """Pip greets whoever just selected their name — no button press needed."""
+    try:
+        session = RealtimeSession(
+            on_audio_chunk=play_audio_chunk,
+            on_state_change=lambda s: None,
+            profile=profile,
+        )
+        hw.show_speaking()
+        hw.start_breathing(SPEAK_COLOR)
+        session._send({
+            "type": "response.create",
+            "response": {
+                "modalities": ["audio", "text"],
+                "instructions": (
+                    f"Greet {profile} warmly and briefly — one or two sentences "
+                    "max. Let them know you're here and ready to listen whenever "
+                    "they press the button. Stay in character as Pip."
+                ),
+            },
+        })
+        session.pump_until_response_done()
+        hw.stop_breathing()
+        close_playback()
+        session.close()
+    except Exception as exc:
+        print(f"[greet error] {exc}")
+
+
 def main():
     hw = Hardware()
 
-    print("Nemma is starting up…")
+    print("Pip is starting up…")
     hw.show_idle()
     hw.start_breathing(IDLE_COLOR)
 
     while True:
-        # ── who's there? — soft button picker instead of Nemma introducing itself ──
+        # ── who's there? ─────────────────────────────────────────
         hw.stop_breathing()
         profile = hw.choose_profile(list(PROFILES.keys()))
         print(f"[profile] {profile}")
+
+        # ── Pip greets the profile immediately ───────────────────
+        greet(hw, profile)
+
+        # ── conversation loop — stays here until device is restarted ──
         hw.show_idle()
         hw.start_breathing(IDLE_COLOR)
 
-        # ── wait for button ──────────────────────────────────────
-        hw.wait_for_button()
+        while True:
+            # ── wait for button press ────────────────────────────
+            hw.wait_for_button()
 
-        try:
-            session = RealtimeSession(
-                on_audio_chunk=play_audio_chunk,
-                on_state_change=lambda s: None,
-                profile=profile,
-            )
-
-            # ── listening — stream mic straight into the session ──
-            hw.stop_breathing()
-            hw.show_listening()
-            hw.start_breathing(LISTEN_COLOR)
-
-            stream_microphone(session, duration=RECORD_SECONDS)
-            session.commit_and_respond()
-
-            hw.stop_breathing()
-
-            # ── thinking → speaking — handled by streamed callbacks ──
-            hw.show_thinking()
-            hw.pulse_once(THINK_COLOR, duration=0.3)
-
-            hw.show_speaking()
-            hw.start_breathing(SPEAK_COLOR)
-            session.pump_until_response_done()
-            hw.stop_breathing()
-            close_playback()
-
-            session.close()
-
-        except Exception as exc:
-            print(f"[error] {exc}")
             try:
-                fallback_session = RealtimeSession(
+                session = RealtimeSession(
                     on_audio_chunk=play_audio_chunk,
                     on_state_change=lambda s: None,
+                    profile=profile,
                 )
-                hw.show_speaking()
-                fallback_session._send({
-                    "type": "response.create",
-                    "response": {
-                        "modalities": ["audio"],
-                        "instructions": (
-                            "Say, gently and warmly: Oh whoosh — I had a little "
-                            "hiccup. I'm still here though, I promise."
-                        ),
-                    },
-                })
-                fallback_session.pump_until_response_done()
-                close_playback()
-                fallback_session.close()
-            except Exception:
-                pass
 
-        # ── back to idle ─────────────────────────────────────────
-        hw.show_idle()
-        hw.start_breathing(IDLE_COLOR)
+                hw.stop_breathing()
+                hw.show_listening()
+                hw.start_breathing(LISTEN_COLOR)
+
+                stream_microphone(session, duration=RECORD_SECONDS)
+                session.commit_and_respond()
+
+                hw.stop_breathing()
+                hw.show_thinking()
+                hw.pulse_once(THINK_COLOR, duration=0.3)
+
+                hw.show_speaking()
+                hw.start_breathing(SPEAK_COLOR)
+                session.pump_until_response_done()
+                hw.stop_breathing()
+                close_playback()
+                session.close()
+
+            except Exception as exc:
+                print(f"[error] {exc}")
+                try:
+                    hw.show_speaking()
+                    fallback = RealtimeSession(
+                        on_audio_chunk=play_audio_chunk,
+                        on_state_change=lambda s: None,
+                        profile=profile,
+                    )
+                    fallback._send({
+                        "type": "response.create",
+                        "response": {
+                            "modalities": ["audio"],
+                            "instructions": (
+                                "Say, gently and warmly: Oh whoosh — I had a little "
+                                "hiccup. I'm still here though, I promise."
+                            ),
+                        },
+                    })
+                    fallback.pump_until_response_done()
+                    close_playback()
+                    fallback.close()
+                except Exception:
+                    pass
+
+            hw.show_idle()
+            hw.start_breathing(IDLE_COLOR)
 
 
 if __name__ == "__main__":
