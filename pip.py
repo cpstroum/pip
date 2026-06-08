@@ -53,7 +53,7 @@ NEOPIXEL_PIN   = "P0"   # change to match your wiring
 NEOPIXEL_COUNT = 8
 
 RECORD_SECONDS  = 5
-MIC_SAMPLE_RATE = 24000  # input: GA realtime API expects 24kHz PCM
+MIC_SAMPLE_RATE = 16000  # mic hardware typically maxes at 16kHz
 OUT_SAMPLE_RATE = 24000  # output: Realtime API returns PCM16 at 24kHz
 CHANNELS        = 1
 CHUNK           = 1024
@@ -231,14 +231,20 @@ def stream_microphone(session, duration=RECORD_SECONDS):
         session.send_audio_chunk(b"\x00\x00" * CHUNK)
         return
 
-    pa     = pyaudio.PyAudio()
-    stream = pa.open(
-        format=pyaudio.paInt16,
-        channels=CHANNELS,
-        rate=MIC_SAMPLE_RATE,
-        input=True,
-        frames_per_buffer=CHUNK,
-    )
+    pa = pyaudio.PyAudio()
+    try:
+        stream = pa.open(
+            format=pyaudio.paInt16,
+            channels=CHANNELS,
+            rate=MIC_SAMPLE_RATE,
+            input=True,
+            frames_per_buffer=CHUNK,
+        )
+        print(f"[mic] opened at {MIC_SAMPLE_RATE}Hz")
+    except Exception as e:
+        print(f"[mic] FAILED to open: {e}")
+        pa.terminate()
+        return
 
     silence_time = 0.0
     start        = time.time()
@@ -398,7 +404,7 @@ class RealtimeSession:
                     "input": {
                         "format": {
                             "type": "audio/pcm",
-                            "rate": MIC_SAMPLE_RATE,
+                            "rate": 16000,
                         },
                         "transcription": {
                             "model": "gpt-realtime-whisper",
