@@ -95,10 +95,13 @@ class Hardware:
         self._breathing = False
         self._breath_thread = None
 
+        self._btn = None
+
         if ON_DEVICE:
             Board("UNIHIKER").begin()
             self.gui = GUI()
             self.np  = NeoPixel(Pin(Pin.P0), NEOPIXEL_COUNT)
+            self._btn = Pin(Pin.P23, Pin.IN)
 
     # ── NeoPixel helpers ──
 
@@ -206,20 +209,22 @@ class Hardware:
     # ── Button ──
 
     def wait_for_button(self):
-        """Block until button is pressed."""
+        """Block until button is freshly pressed (debounced)."""
         if not ON_DEVICE:
             input("[dev] Press ENTER to simulate button press…")
             return
-        btn = Pin(Pin.P23, Pin.IN)
-        while btn.read_digital() == 1:
+        # Ensure button is released before waiting for next press
+        while self._btn.read_digital() == 0:
+            time.sleep(0.05)
+        # Now wait for press
+        while self._btn.read_digital() == 1:
             time.sleep(0.05)
 
     def is_button_held(self):
         """Return True while button is held down."""
         if not ON_DEVICE:
             return False
-        btn = Pin(Pin.P23, Pin.IN)
-        return btn.read_digital() == 0
+        return self._btn.read_digital() == 0
 
     def show_ready(self):
         """Idle screen with push-to-talk prompt."""
