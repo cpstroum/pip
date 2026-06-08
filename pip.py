@@ -53,7 +53,7 @@ NEOPIXEL_PIN   = "P0"   # change to match your wiring
 NEOPIXEL_COUNT = 8
 
 RECORD_SECONDS  = 5
-MIC_SAMPLE_RATE = 16000  # mic hardware typically maxes at 16kHz
+MIC_SAMPLE_RATE = 24000  # match realtime API input format
 OUT_SAMPLE_RATE = 24000  # output: Realtime API returns PCM16 at 24kHz
 CHANNELS        = 1
 CHUNK           = 1024
@@ -220,8 +220,8 @@ class Hardware:
 # and hands speech back the same way — so we stream both directions instead of
 # recording/playing whole files.
 
-_playback_stream = None
-_playback_pa     = None
+import subprocess
+_aplay_proc = None
 
 
 def stream_microphone(session, duration=RECORD_SECONDS):
@@ -281,42 +281,37 @@ def _rms(data: bytes) -> float:
 
 
 def play_audio_chunk(pcm16_bytes: bytes):
-    """Play a streamed PCM16 chunk as it arrives, keeping one open output stream."""
-    global _playback_stream, _playback_pa
+    """Pipe PCM16 chunks to aplay — more reliable than PyAudio output on Linux."""
+    global _aplay_proc
 
     if not ON_DEVICE:
         return
 
-    if _playback_pa is None:
-        _playback_pa = pyaudio.PyAudio()
-        # Log available output devices so we can diagnose routing issues
-        for i in range(_playback_pa.get_device_count()):
-            info = _playback_pa.get_device_info_by_index(i)
-            if info["maxOutputChannels"] > 0:
-                print(f"[audio device {i}] {info['name']} — default: {info.get('isDefault', False)}", flush=True)
-
-    if _playback_stream is None:
-        print(f"[audio] opening output stream at {OUT_SAMPLE_RATE}Hz", flush=True)
-        _playback_stream = _playback_pa.open(
-            format=pyaudio.paInt16,
-            channels=CHANNELS,
-            rate=OUT_SAMPLE_RATE,
-            output=True,
+    if _aplay_proc is None or _aplay_proc.poll() is not None:
+        print(f"[audio] starting aplay at {OUT_SAMPLE_RATE}Hz")
+        _aplay_proc = subprocess.Popen(
+            ["aplay", "-r", str(OUT_SAMPLE_RATE), "-f", "S16_LE", "-c", "1", "-"],
+            stdin=subprocess.PIPE,
         )
 
-    _playback_stream.write(pcm16_bytes)
+    try:
+        _aplay_proc.stdin.write(pcm16_bytes)
+        _aplay_proc.stdin.flush()
+    except BrokenPipeError:
+        print("[audio] aplay pipe broken — restarting next chunk")
+        _aplay_proc = None
 
 
 def close_playback():
-    global _playback_stream, _playback_pa
+    global _aplay_proc
 
-    if _playback_stream is not None:
-        _playback_stream.stop_stream()
-        _playback_stream.close()
-        _playback_stream = None
-    if _playback_pa is not None:
-        _playback_pa.terminate()
-        _playback_pa = None
+    if _aplay_proc and _aplay_proc.poll() is None:
+        try:
+            _aplay_proc.stdin.close()
+        except Exception:
+            pass
+        _aplay_proc.wait(timeout=2)
+        _aplay_proc = None
 
 
 # ── Realtime pipeline ─────────────────────────────────────────────────────────
@@ -404,7 +399,7 @@ class RealtimeSession:
                     "input": {
                         "format": {
                             "type": "audio/pcm",
-                            "rate": 16000,
+                            "rate": MIC_SAMPLE_RATE,
                         },
                         "transcription": {
                             "model": "gpt-realtime-whisper",
