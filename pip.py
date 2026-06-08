@@ -354,7 +354,7 @@ DEFAULT_PROFILE = "Friend"
 
 # Lower temperature keeps Nemma's tone gentle and consistent rather than wild;
 # the output token cap keeps replies short so Esther isn't overwhelmed.
-REALTIME_TEMPERATURE = 0.7
+#REALTIME_TEMPERATURE = 0.7
 
 
 def instructions_for_profile(profile: str) -> str:
@@ -390,7 +390,7 @@ class RealtimeSession:
             "session": {
                 "type": "realtime",
                 "instructions": instructions_for_profile(self._profile),
-                "temperature": REALTIME_TEMPERATURE,
+                #"temperature": REALTIME_TEMPERATURE,
                 "output_modalities": ["audio"],
                 "tools": [],
                 "max_output_tokens": "inf",
@@ -425,35 +425,44 @@ class RealtimeSession:
         })
 
     def send_audio_chunk(self, pcm16_bytes: bytes):
+        self._chunks_sent = getattr(self, "_chunks_sent", 0) + 1
         self._send({
             "type": "input_audio_buffer.append",
             "audio": base64.b64encode(pcm16_bytes).decode("ascii"),
         })
 
     def commit_and_respond(self):
+        time.sleep(0.1)  # let final chunks flush before committing
+        print(f"[ws] committing buffer ({getattr(self, '_chunks_sent', 0)} chunks sent)")
         self._send({"type": "input_audio_buffer.commit"})
         self._send({"type": "response.create"})
 
     def pump_until_response_done(self):
         """Read events until the model finishes speaking, dispatching callbacks."""
+        audio_bytes_received = 0
         while True:
             event = json.loads(self._ws.recv())
             etype = event.get("type", "")
 
             if etype == "response.audio.delta":
                 chunk = base64.b64decode(event["delta"])
-                print(f"[audio] got {len(chunk)} bytes", flush=True)
+                audio_bytes_received += len(chunk)
+                print(f"[audio] got {len(chunk)} bytes (total {audio_bytes_received})")
                 self._on_state_change("speaking")
                 self._on_audio_chunk(chunk)
-            elif etype == "response.audio_transcript.delta":
-                print(f"[Nemma] {event.get('delta', '')}", end="", flush=True)
+            elif etype in ("response.audio_transcript.delta", "response.audio.transcript.delta"):
+                print(f"[Nemma says] {event.get('delta', '')}", end="")
+            elif etype in ("conversation.item.input_audio_transcription.delta",
+                           "input_audio_transcription.delta"):
+                print(f"[heard] {event.get('delta', '')}", end="")
             elif etype == "response.done":
-                print("\n[ws] response done")
+                print(f"\n[ws] response done — {audio_bytes_received} audio bytes total")
                 return
             elif etype == "error":
                 raise RuntimeError(event.get("error", event))
             else:
-                print(f"[ws] {etype}", flush=True)
+                # Log full content of unknown events to understand new API structure
+                print(f"[ws] {etype}: {json.dumps(event)[:200]}")
 
     def close(self):
         self._ws.close()
