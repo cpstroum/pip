@@ -33,7 +33,8 @@ NEOPIXEL_PIN   = "P0"   # change to match your wiring
 NEOPIXEL_COUNT = 8
 
 RECORD_SECONDS  = 5
-SAMPLE_RATE     = 16000
+MIC_SAMPLE_RATE = 16000  # input: Whisper/VAD expects 16kHz
+OUT_SAMPLE_RATE = 24000  # output: Realtime API returns PCM16 at 24kHz
 CHANNELS        = 1
 CHUNK           = 1024
 SILENCE_THRESH  = 500   # RMS below this = silence
@@ -173,6 +174,10 @@ class Hardware:
                 onclick=make_handler(name),
             )
 
+        # Brief pause so the screen finishes rendering before we accept taps —
+        # prevents a stray touch during the render from firing immediately.
+        time.sleep(0.5)
+
         while chosen["name"] is None:
             time.sleep(0.05)
 
@@ -210,7 +215,7 @@ def stream_microphone(session, duration=RECORD_SECONDS):
     stream = pa.open(
         format=pyaudio.paInt16,
         channels=CHANNELS,
-        rate=SAMPLE_RATE,
+        rate=MIC_SAMPLE_RATE,
         input=True,
         frames_per_buffer=CHUNK,
     )
@@ -223,7 +228,7 @@ def stream_microphone(session, duration=RECORD_SECONDS):
         session.send_audio_chunk(data)
 
         rms = _rms(data)
-        dt  = CHUNK / SAMPLE_RATE
+        dt  = CHUNK / MIC_SAMPLE_RATE
         if rms < SILENCE_THRESH:
             silence_time += dt
         else:
@@ -262,7 +267,7 @@ def play_audio_chunk(pcm16_bytes: bytes):
         _playback_stream = _playback_pa.open(
             format=pyaudio.paInt16,
             channels=CHANNELS,
-            rate=SAMPLE_RATE,
+            rate=OUT_SAMPLE_RATE,
             output=True,
         )
 
