@@ -320,7 +320,7 @@ def close_playback():
 # a single streaming websocket session. Nemma's persona now lives entirely in
 # REALTIME_INSTRUCTIONS since the realtime model both "thinks" and "speaks".
 
-REALTIME_MODEL = "gpt-4o-realtime-preview"
+REALTIME_MODEL = "gpt-realtime-2"
 REALTIME_URL   = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
 
 REALTIME_BASE_INSTRUCTIONS = SYSTEM_PROMPT + (
