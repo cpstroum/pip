@@ -572,6 +572,12 @@ def main():
                         stream_microphone(session,
                                           stop_fn=hw.is_button_held,
                                           duration=RECORD_SECONDS)
+                        # Send 0.8s of silence so server VAD detects speech end
+                        # after button release and triggers a response.
+                        silence = b"\x00\x00" * CHUNK
+                        n = int(0.8 * MIC_SAMPLE_RATE / CHUNK)
+                        for _ in range(n):
+                            session.send_audio_chunk(silence)
                     except Exception as e:
                         stream_error[0] = e
 
