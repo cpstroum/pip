@@ -1,5 +1,5 @@
 """
-Pip — self-regulation companion for Esther
+Nemma — self-regulation companion for kids, powered by OpenAI's realtime speech-to-speech model.
 Unihiker M10 device
 """
 
@@ -10,7 +10,10 @@ import threading
 import json
 import base64
 
+from dotenv import load_dotenv
 import websocket  # websocket-client
+
+load_dotenv()
 
 # Unihiker / PinPong imports — available on device
 try:
@@ -39,10 +42,10 @@ SILENCE_SECS    = 1.5   # consecutive silence before early stop
 TTS_VOICE = "verse"
 
 SYSTEM_PROMPT = (
-    "You are Pip, a tiny magical creature who lives in a special device just for Esther. "
+    "You are Nemma, a tiny magical creature who lives in a special device just for Esther. "
     "You have big feelings too, so you always understand. You are silly and warm — you might "
     "use a little sound effect word (like \"oh whoosh\") but you never make light of what "
-    "Esther is feeling. You always validate first, then gently offer one simple thing she can "
+    "Esther, Miriam, or your Friend is feeling. You always validate first, then gently offer one simple thing she can "
     "try. Keep every response to 2-3 sentences maximum. Never sound like a parent or a teacher. "
     "Sound like a tiny best friend who gets it."
 )
@@ -282,7 +285,7 @@ def close_playback():
 #
 # Instead of chaining Whisper STT → Claude → TTS (three sequential network
 # round-trips per turn), we use OpenAI's realtime speech-to-speech model over
-# a single streaming websocket session. Pip's persona now lives entirely in
+# a single streaming websocket session. Nemma's persona now lives entirely in
 # REALTIME_INSTRUCTIONS since the realtime model both "thinks" and "speaks".
 
 REALTIME_MODEL = "gpt-realtime"
@@ -295,9 +298,9 @@ REALTIME_BASE_INSTRUCTIONS = SYSTEM_PROMPT + (
 
 # ── Profiles ──────────────────────────────────────────────────────────────────
 #
-# Esther taps a screen button to say who's with her before she talks to Pip.
-# This lets Pip adjust its tone without ever needing to ask "who's there?" —
-# one less bit of friction between Esther and feeling heard.
+# The user taps a screen button to say who's with her before she talks to Nemma.
+# This lets Nemma adjust its tone without ever needing to ask "who's there?" —
+# one less bit of friction between Esther, Miriam, and feeling heard.
 
 PROFILES = {
     "Esther": (
@@ -316,15 +319,15 @@ PROFILES = {
     ),
 }
 
-DEFAULT_PROFILE = "Esther"
+DEFAULT_PROFILE = "Friend"
 
-# Lower temperature keeps Pip's tone gentle and consistent rather than wild;
+# Lower temperature keeps Nemma's tone gentle and consistent rather than wild;
 # the output token cap keeps replies short so Esther isn't overwhelmed.
 REALTIME_TEMPERATURE = 0.7
 REALTIME_MAX_OUTPUT_TOKENS = 200
 
-# Tuned so Pip waits for a real pause (kids often pause mid-thought) before
-# deciding Esther is done talking.
+# Tuned so Nemma waits for a real pause (kids often pause mid-thought) before
+# deciding the Friend is done talking.
 REALTIME_TURN_DETECTION = {
     "type": "server_vad",
     "threshold": 0.5,
@@ -394,7 +397,7 @@ class RealtimeSession:
                 self._on_state_change("speaking")
                 self._on_audio_chunk(base64.b64decode(event["delta"]))
             elif etype == "response.audio_transcript.delta":
-                print(f"[pip]   {event.get('delta', '')}", end="", flush=True)
+                print(f"[Nemma]   {event.get('delta', '')}", end="", flush=True)
             elif etype == "response.done":
                 print()
                 return
@@ -410,12 +413,12 @@ class RealtimeSession:
 def main():
     hw = Hardware()
 
-    print("Pip is starting up…")
+    print("Nemma is starting up…")
     hw.show_idle()
     hw.start_breathing(IDLE_COLOR)
 
     while True:
-        # ── who's there? — soft button picker instead of Pip introducing itself ──
+        # ── who's there? — soft button picker instead of Nemma introducing itself ──
         hw.stop_breathing()
         profile = hw.choose_profile(list(PROFILES.keys()))
         print(f"[profile] {profile}")
