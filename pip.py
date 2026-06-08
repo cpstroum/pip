@@ -53,7 +53,7 @@ NEOPIXEL_PIN   = "P0"   # change to match your wiring
 NEOPIXEL_COUNT = 8
 
 RECORD_SECONDS  = 5
-MIC_SAMPLE_RATE = 16000  # input: Whisper/VAD expects 16kHz
+MIC_SAMPLE_RATE = 24000  # input: GA realtime API expects 24kHz PCM
 OUT_SAMPLE_RATE = 24000  # output: Realtime API returns PCM16 at 24kHz
 CHANNELS        = 1
 CHUNK           = 1024
@@ -355,16 +355,6 @@ DEFAULT_PROFILE = "Friend"
 # Lower temperature keeps Nemma's tone gentle and consistent rather than wild;
 # the output token cap keeps replies short so Esther isn't overwhelmed.
 REALTIME_TEMPERATURE = 0.7
-REALTIME_MAX_OUTPUT_TOKENS = 200
-
-# Tuned so Nemma waits for a real pause (kids often pause mid-thought) before
-# deciding the Friend is done talking.
-REALTIME_TURN_DETECTION = {
-    "type": "server_vad",
-    "threshold": 0.5,
-    "prefix_padding_ms": 300,
-    "silence_duration_ms": 700,
-}
 
 
 def instructions_for_profile(profile: str) -> str:
@@ -398,15 +388,39 @@ class RealtimeSession:
         self._send({
             "type": "session.update",
             "session": {
-                "type": "session",
-                "modalities": ["audio", "text"],
+                "type": "realtime",
                 "instructions": instructions_for_profile(self._profile),
-                "voice": TTS_VOICE,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "turn_detection": REALTIME_TURN_DETECTION,
                 "temperature": REALTIME_TEMPERATURE,
-                "max_response_output_tokens": REALTIME_MAX_OUTPUT_TOKENS,
+                "output_modalities": ["audio"],
+                "tools": [],
+                "max_output_tokens": "inf",
+                "audio": {
+                    "input": {
+                        "format": {
+                            "type": "audio/pcm",
+                            "rate": MIC_SAMPLE_RATE,
+                        },
+                        "transcription": {
+                            "model": "gpt-realtime-whisper",
+                        },
+                        "noise_reduction": {
+                            "type": "near_field",
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.5,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 500,
+                        },
+                    },
+                    "output": {
+                        "format": {
+                            "type": "audio/pcm",
+                            "rate": OUT_SAMPLE_RATE,
+                        },
+                        "voice": TTS_VOICE,
+                    },
+                },
             },
         })
 
