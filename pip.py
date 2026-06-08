@@ -416,7 +416,7 @@ class RealtimeSession:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def greet(hw, profile):
-    """Pip greets whoever just selected their name — no button press needed."""
+    """Nemma greets whoever just selected their name — no button press needed."""
     try:
         session = RealtimeSession(
             on_audio_chunk=play_audio_chunk,
@@ -432,7 +432,7 @@ def greet(hw, profile):
                 "instructions": (
                     f"Greet {profile} warmly and briefly — one or two sentences "
                     "max. Let them know you're here and ready to listen whenever "
-                    "they press the button. Stay in character as Pip."
+                    "they press the button. Stay in character as Nemma."
                 ),
             },
         })
@@ -447,7 +447,7 @@ def greet(hw, profile):
 def main():
     hw = Hardware()
 
-    print("Pip is starting up…")
+    print("Nemma is starting up…")
     hw.show_idle()
     hw.start_breathing(IDLE_COLOR)
 
@@ -457,7 +457,7 @@ def main():
         profile = hw.choose_profile(list(PROFILES.keys()))
         print(f"[profile] {profile}")
 
-        # ── Pip greets the profile immediately ───────────────────
+        # ── Nemma greets the profile immediately ───────────────────
         greet(hw, profile)
 
         # ── conversation loop — stays here until device is restarted ──
