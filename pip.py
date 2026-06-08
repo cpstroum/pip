@@ -63,9 +63,9 @@ SILENCE_SECS    = 1.5   # consecutive silence before early stop
 TTS_VOICE = "coral"
 
 SYSTEM_PROMPT = (
-    "You are Nemma, a tiny magical creature who lives in a special device just for your friend. "
+    "You are Nemma, a tiny magical creature who lives in a special device as emotional support for your friend. "
     "You have big feelings too, so you always understand. You are silly and warm, "
-    "but you never make light of what Esther, Miriam, or your Friend is feeling. "
+    "but you never make light of what your friend is feeling. Your friend is only a kid. "
     "You always validate first, then gently offer one simple thing your Friend can try to manage emotions."
     "Keep every response to 2-3 sentences maximum. Never sound like a parent or a teacher. "
     "Sound like a tiny best friend who gets it."
@@ -206,12 +206,31 @@ class Hardware:
     # ── Button ──
 
     def wait_for_button(self):
+        """Block until button is pressed."""
         if not ON_DEVICE:
             input("[dev] Press ENTER to simulate button press…")
             return
         btn = Pin(Pin.P23, Pin.IN)
         while btn.read_digital() == 1:
             time.sleep(0.05)
+
+    def is_button_held(self):
+        """Return True while button is held down."""
+        if not ON_DEVICE:
+            return False
+        btn = Pin(Pin.P23, Pin.IN)
+        return btn.read_digital() == 0
+
+    def show_ready(self):
+        """Idle screen with push-to-talk prompt."""
+        if not self.gui:
+            print("[screen] Ready — hold to talk")
+            return
+        self.gui.clear()
+        self.gui.draw_image(x=120, y=110, w=180, h=180,
+                            image=SPRITE_IDLE, origin="center")
+        self.gui.draw_text(x=120, y=215, text="hold ● to talk",
+                           font_size=15, color="#50b4ff", origin="center")
 
 
 # ── Audio helpers ─────────────────────────────────────────────────────────────
@@ -224,8 +243,12 @@ import subprocess
 _aplay_proc = None
 
 
-def stream_microphone(session, duration=RECORD_SECONDS):
-    """Capture mic audio and push PCM16 chunks straight into the session."""
+def stream_microphone(session, stop_fn=None, duration=RECORD_SECONDS):
+    """Capture mic audio and push chunks into the session.
+
+    Stops when stop_fn() returns False (button released), silence is detected,
+    or duration is exceeded — whichever comes first.
+    """
     if not ON_DEVICE:
         print("[dev] Skipping real recording — sending silent stub chunk")
         session.send_audio_chunk(b"\x00\x00" * CHUNK)
@@ -252,6 +275,10 @@ def stream_microphone(session, duration=RECORD_SECONDS):
     while True:
         data = stream.read(CHUNK, exception_on_overflow=False)
         session.send_audio_chunk(data)
+
+        if stop_fn and not stop_fn():
+            print("[mic] button released — stopping")
+            break
 
         rms = _rms(data)
         dt  = CHUNK / MIC_SAMPLE_RATE
@@ -516,11 +543,11 @@ def main():
         greet(hw, profile)
 
         # ── conversation loop — stays here until device is restarted ──
-        hw.show_idle()
+        hw.show_ready()
         hw.start_breathing(IDLE_COLOR)
 
         while True:
-            # ── wait for button press ────────────────────────────
+            # ── wait for button press, then hold to talk ─────────
             hw.wait_for_button()
 
             try:
@@ -542,7 +569,9 @@ def main():
 
                 def do_stream():
                     try:
-                        stream_microphone(session, duration=RECORD_SECONDS)
+                        stream_microphone(session,
+                                          stop_fn=hw.is_button_held,
+                                          duration=RECORD_SECONDS)
                     except Exception as e:
                         stream_error[0] = e
 
@@ -598,7 +627,7 @@ def main():
                 except Exception:
                     pass
 
-            hw.show_idle()
+            hw.show_ready()
             hw.start_breathing(IDLE_COLOR)
 
 
