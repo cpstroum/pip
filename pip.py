@@ -263,7 +263,14 @@ def play_audio_chunk(pcm16_bytes: bytes):
 
     if _playback_pa is None:
         _playback_pa = pyaudio.PyAudio()
+        # Log available output devices so we can diagnose routing issues
+        for i in range(_playback_pa.get_device_count()):
+            info = _playback_pa.get_device_info_by_index(i)
+            if info["maxOutputChannels"] > 0:
+                print(f"[audio device {i}] {info['name']} — default: {info.get('isDefault', False)}", flush=True)
+
     if _playback_stream is None:
+        print(f"[audio] opening output stream at {OUT_SAMPLE_RATE}Hz", flush=True)
         _playback_stream = _playback_pa.open(
             format=pyaudio.paInt16,
             channels=CHANNELS,
@@ -313,14 +320,13 @@ PROFILES = {
         "personally, like you've known her forever."
     ),
     "Miriam": (
-        " You're talking with Miriam, Esther's grown-up. Stay just as warm, but "
+        " You're talking with Miriam. Stay just as warm, but "
         "you can speak a little more plainly — no need to over-explain feelings "
         "the way you would for Esther."
     ),
     "Friend": (
-        " You're talking with one of Esther's friends. Be extra welcoming and a "
-        "little more playful and curious — help them feel like part of Esther's "
-        "world too."
+        " You're talking with one of Miriam or Esther's friends. Be extra welcoming and a "
+        "little more playful and curious"
     ),
 }
 
@@ -355,6 +361,7 @@ class RealtimeSession:
         self._on_audio_chunk  = on_audio_chunk
         self._on_state_change = on_state_change
         self._profile = profile
+        print(f"[ws] connecting to {REALTIME_URL}")
         self._ws = websocket.create_connection(
             REALTIME_URL,
             header=[
@@ -362,6 +369,7 @@ class RealtimeSession:
                 "OpenAI-Beta: realtime=v1",
             ],
         )
+        print("[ws] connected")
         self._configure_session()
 
     def _send(self, event: dict):
@@ -399,15 +407,19 @@ class RealtimeSession:
             etype = event.get("type", "")
 
             if etype == "response.audio.delta":
+                chunk = base64.b64decode(event["delta"])
+                print(f"[audio] got {len(chunk)} bytes", flush=True)
                 self._on_state_change("speaking")
-                self._on_audio_chunk(base64.b64decode(event["delta"]))
+                self._on_audio_chunk(chunk)
             elif etype == "response.audio_transcript.delta":
-                print(f"[Nemma]   {event.get('delta', '')}", end="", flush=True)
+                print(f"[Nemma] {event.get('delta', '')}", end="", flush=True)
             elif etype == "response.done":
-                print()
+                print("\n[ws] response done")
                 return
             elif etype == "error":
                 raise RuntimeError(event.get("error", event))
+            else:
+                print(f"[ws] {etype}", flush=True)
 
     def close(self):
         self._ws.close()
