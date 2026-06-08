@@ -386,7 +386,6 @@ class RealtimeSession:
             REALTIME_URL,
             header=[
                 f"Authorization: Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta: realtime=v1",
             ],
         )
         print("[ws] connected")
