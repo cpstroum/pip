@@ -9,11 +9,30 @@ import math
 import threading
 import json
 import base64
+import logging
 
 from dotenv import load_dotenv
 import websocket  # websocket-client
 
 load_dotenv()
+
+logging.basicConfig(
+    filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), "nemma.log"),
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(message)s",
+    force=True,
+)
+log = logging.getLogger("nemma")
+
+
+def _print(*args, **kwargs):
+    msg = " ".join(str(a) for a in args)
+    log.info(msg)
+    print(msg, **kwargs)
+
+
+# Replace all print() calls with _print() so output goes to both log and stdout
+print = _print
 
 # Unihiker / PinPong imports — available on device
 try:
